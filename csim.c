@@ -1,4 +1,4 @@
-/* Enter your name and loginID */
+/* Lee Seung Yun, 201645825 */
 #include <getopt.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -86,7 +86,8 @@ void freeCache()
  */
 void replayTrace(char* trace_fn)
 {
-	//Enter your code
+	// TODO("Add code")
+	
 }
 
 /*
