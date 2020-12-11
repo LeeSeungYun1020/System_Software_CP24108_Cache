@@ -12,15 +12,21 @@
 
 #define ADDRESS_LENGTH 64
 
+void initCache();
+void freeCache();
+void replayTrace(char* trace_fn);
+void printUsage(char* argv[]);
+void accessMemory(unsigned long long int address);
+
 /* Type: Memory address */
 typedef unsigned long long int mem_addr_t;
 
 /* Type: Cache line
    LRU is a counter used to implement LRU replacement policy  */
 typedef struct cache_line {
-    char valid;
-    mem_addr_t tag;
-    unsigned long long int lru;
+	char valid;
+	mem_addr_t tag;
+	unsigned long long int lru;
 } cache_line_t;
 
 typedef cache_line_t* cache_set_t;
@@ -28,9 +34,9 @@ typedef cache_set_t* cache_t;
 
 /* Globals set by command line args */
 int verbosity = 0; /* print trace if set */
-int s = 0; /* set index bits */
-int b = 0; /* block offset bits */
-int E = 0; /* associativity */
+int s = 0;         /* set index bits */
+int b = 0;         /* block offset bits */
+int E = 0;         /* associativity */
 char* trace_file = NULL;
 
 /* Derived from command line args */
@@ -47,122 +53,176 @@ unsigned long long int lru_counter = 1;
 cache_t cache;
 mem_addr_t set_index_mask;
 
+unsigned long long int getLruCounter() {
+	lru_counter++;
+	return lru_counter;
+}
+
 /*
  * initCache - Allocate memory, write 0's for valid and tag and LRU
  * also computes the set_index_mask
  */
-void initCache()
-{
-    int i,j;
-    cache = (cache_set_t*) malloc(sizeof(cache_set_t) * S);
-    for (i=0; i<S; i++){
-        cache[i]=(cache_line_t*) malloc(sizeof(cache_line_t) * E);
-        for (j=0; j<E; j++){
-            cache[i][j].valid = 0;
-            cache[i][j].tag = 0;
-            cache[i][j].lru = 0;
-        }
-    }
+void initCache() {
+	int i, j;
+	cache = (cache_set_t*)malloc(sizeof(cache_set_t) * S);
+	for (i = 0; i < S; i++) {
+		cache[i] = (cache_line_t*)malloc(sizeof(cache_line_t) * E);
+		for (j = 0; j < E; j++) {
+			cache[i][j].valid = 0;
+			cache[i][j].tag = 0;
+			cache[i][j].lru = 0;
+		}
+	}
 
-    /* Computes set index mask */
-    set_index_mask = (mem_addr_t) (pow(2, s) - 1);
+	/* Computes set index mask */
+	set_index_mask = (mem_addr_t)(pow(2, s) - 1);
 }
 
 
 /*
  * freeCache - free allocated memory
  */
-void freeCache()
-{
-    int i;
-    for (i=0; i<S; i++){
-        free(cache[i]);
-    }
-    free(cache);
+void freeCache() {
+	int i;
+	for (i = 0; i < S; i++) {
+		free(cache[i]);
+	}
+	free(cache);
 }
 
 /*
  * replayTrace - replays the given trace file against the cache
  */
-void replayTrace(char* trace_fn)
-{
-	// TODO("Add code")
-	
+void replayTrace(char* trace_fn) {
+	char line[32] = { 0, };
+	FILE* fp = fopen(trace_fn, "r");
+
+	char operation;
+	mem_addr_t address;
+	int size;
+
+	if (fp == NULL) {
+		printf("File open failed\n");
+		exit(1);
+	}
+
+	while (fgets(line, sizeof(line) - 1, fp) != NULL) {
+		sscanf(line, " %c %llx,%d", &operation, &address, &size);
+		// operation 'I" ignore
+		if (operation == 'L' || operation == 'S') {
+			// 1 load or store
+			accessMemory(address);
+		} else if (operation == 'M') {
+			// 2 modify
+			// load
+			accessMemory(address);
+			// store
+			accessMemory(address);
+		}
+	}
+	fclose(fp);
+}
+
+void accessMemory(unsigned long long int address) {
+	int i;
+	// address => Tag / Set / Block
+	//                 index  offset
+	mem_addr_t tag = address >> (s + b);
+	mem_addr_t setIndex = set_index_mask & (address >> b);
+	cache_set_t set = cache[setIndex];
+	mem_addr_t minLru = set[0].lru;
+	mem_addr_t lineIndex = 0;
+
+	for (i = 0; i < E; i++) {
+		if (set[i].valid && set[i].tag == tag) {
+			hit_count++;
+			set[i].lru = getLruCounter();
+			return;
+		}
+		if (minLru > set[i].lru) {
+			minLru = set[i].lru;
+			lineIndex = i;
+		}
+	}
+	miss_count++;
+	if (set[lineIndex].valid) {
+		eviction_count++;
+	}
+	set[lineIndex].valid = 1;
+	set[lineIndex].tag = tag;
+	set[lineIndex].lru = getLruCounter();
 }
 
 /*
  * printUsage - Print usage info
  */
-void printUsage(char* argv[])
-{
-    printf("Usage: %s [-hv] -s <num> -E <num> -b <num> -t <file>\n", argv[0]);
-    printf("Options:\n");
-    printf("  -h         Print the help message.\n");
-    printf("  -v         Optional verbose flag.\n");
-    printf("  -s <num>   Number of set index bits.\n");
-    printf("  -E <num>   Number of lines per set.\n");
-    printf("  -b <num>   Number of block offset bits.\n");
-    printf("  -t <file>  Trace file.\n");
-    printf("\nExamples:\n");
-    printf("  linux>  %s -s 4 -E 1 -b 4 -t traces/yi2.trace\n", argv[0]);
-    printf("  linux>  %s -v -s 8 -E 2 -b 4 -t traces/yi2.trace\n", argv[0]);
-    exit(0);
+void printUsage(char* argv[]) {
+	printf("Usage: %s [-hv] -s <num> -E <num> -b <num> -t <file>\n", argv[0]);
+	printf("Options:\n");
+	printf("  -h         Print the help message.\n");
+	printf("  -v         Optional verbose flag.\n");
+	printf("  -s <num>   Number of set index bits.\n");
+	printf("  -E <num>   Number of lines per set.\n");
+	printf("  -b <num>   Number of block offset bits.\n");
+	printf("  -t <file>  Trace file.\n");
+	printf("\nExamples:\n");
+	printf("  linux>  %s -s 4 -E 1 -b 4 -t traces/yi2.trace\n", argv[0]);
+	printf("  linux>  %s -v -s 8 -E 2 -b 4 -t traces/yi2.trace\n", argv[0]);
+	exit(0);
 }
 
 /*
  * main - Main routine
  */
-int main(int argc, char* argv[])
-{
-    char c;
+int main(int argc, char* argv[]) {
+	char c;
 
-    while( (c=getopt(argc,argv,"s:E:b:t:vh")) != -1){
-        switch(c){
-        case 's':
-            s = atoi(optarg);
-            break;
-        case 'E':
-            E = atoi(optarg);
-            break;
-        case 'b':
-            b = atoi(optarg);
-            break;
-        case 't':
-            trace_file = optarg;
-            break;
-        case 'v':
-            verbosity = 1;
-            break;
-        case 'h':
-            printUsage(argv);
-            exit(0);
-        default:
-            printUsage(argv);
-            exit(1);
-        }
-    }
+	while ((c = getopt(argc, argv, "s:E:b:t:vh")) != -1) {
+		switch (c) {
+			case 's':
+				s = atoi(optarg);
+				break;
+			case 'E':
+				E = atoi(optarg);
+				break;
+			case 'b':
+				b = atoi(optarg);
+				break;
+			case 't':
+				trace_file = optarg;
+				break;
+			case 'v':
+				verbosity = 1;
+				break;
+			case 'h':
+				printUsage(argv);
+				exit(0);
+			default:
+				printUsage(argv);
+				exit(1);
+		}
+	}
 
-    /* Make sure that all required command line args were specified */
-    if (s == 0 || E == 0 || b == 0 || trace_file == NULL) {
-        printf("%s: Missing required command line argument\n", argv[0]);
-        printUsage(argv);
-        exit(1);
-    }
+	/* Make sure that all required command line args were specified */
+	if (s == 0 || E == 0 || b == 0 || trace_file == NULL) {
+		printf("%s: Missing required command line argument\n", argv[0]);
+		printUsage(argv);
+		exit(1);
+	}
 
-    /* Compute S, E and B from command line args */
-    S = (unsigned int) pow(2, s);
-    B = (unsigned int) pow(2, b);
+	/* Compute S, E and B from command line args */
+	S = (unsigned int)pow(2, s);
+	B = (unsigned int)pow(2, b);
 
-    /* Initialize cache */
-    initCache();
+	/* Initialize cache */
+	initCache();
 
-    replayTrace(trace_file);
+	replayTrace(trace_file);
 
-    /* Free allocated memory */
-    freeCache();
+	/* Free allocated memory */
+	freeCache();
 
-    /* Output the hit and miss statistics for the autograder */
-    printSummary(hit_count, miss_count, eviction_count);
-    return 0;
+	/* Output the hit and miss statistics for the autograder */
+	printSummary(hit_count, miss_count, eviction_count);
+	return 0;
 }
-
